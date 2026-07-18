@@ -1,17 +1,35 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   Verifikations-grinder — applogik
+   ────────────────────────────────────────────────────────────────────────────
+   Vanilla JS, ingen byggkedja. Laddas som klassiskt <script> sist i <body>.
+
+   Struktur (uppifrån och ned):
+     1. TUNE / RANKS ....... trimbara spelparametrar
+     2. Store .............. modulärt persistens-lager (lokalt + valfritt moln)
+     3. State .............. freshState/load/save + molnsynk
+     4. Level-matematik .... XP-kurva och rangtitlar
+     5. Ljud / konfetti .... effekter
+     6. Kärnloop ........... handleBokford (klick → XP, combo, critical, render)
+     7. Streak / achievements
+     8. Rendering .......... dashboards, diagram (Chart.js), carousell
+     9. Inställningar ...... modaler, export/import, reset
+    10. Init .............. koppling av allt vid start
+   ════════════════════════════════════════════════════════════════════════════ */
+
 /* ══════════════════════════════════════════════════════════════════════════
    ⚙️  TRIMBARA INSTÄLLNINGAR  – ändra fritt här
    ══════════════════════════════════════════════════════════════════════════ */
 const TUNE = {
-  XP_PER_VERIF:   10,     // Bas-XP per bokförd verifikation
-  COMBO_WINDOW:   4000,   // ms mellan klick för att bygga combo (4 sek)
-  COMBO_MAX:      10,      // Maxtak på combo-multiplikatorn
-  CRIT_CHANCE:    0.13,   // Sannolikhet för CRITICAL (0.13 = 13%)
-  CRIT_MULT:      3,       // XP-multiplikator vid critical
-  STREAK_BONUS_XP:5,       // Bonus-XP per klick multiplicerat med streak-längd? Nej: fast bonus, se nedan
-  DEFAULT_GOAL:   250,     // Standardmål antal verifikationer
+  XP_PER_VERIF:    10,    // Bas-XP per bokförd verifikation
+  COMBO_WINDOW:    4000,  // ms mellan klick för att bygga combo (4 sek)
+  COMBO_MAX:       10,    // Maxtak på combo-multiplikatorn
+  CRIT_CHANCE:     0.13,  // Sannolikhet för CRITICAL (0.13 = 13 %)
+  CRIT_MULT:       3,     // XP-multiplikator vid critical
+  STREAK_BONUS_XP: 5,     // Fast bonus-XP per klick när en streak (>1 dag) är aktiv
+  DEFAULT_GOAL:    250,   // Standardmål antal verifikationer
   // Level-kurva: XP som krävs för att nå level n = BASE * n^EXP  (eskalerande)
-  LEVEL_BASE:     100,
-  LEVEL_EXP:      1.55,
+  LEVEL_BASE:      100,
+  LEVEL_EXP:       1.55,
 };
 
 /* Rang-titlar per level-tröskel (bokföringstema).
@@ -35,10 +53,65 @@ const RANKS = [
 /* ══════════════════════════════════════════════════════════════════════════
    💾  STATE / PERSISTENS
    ══════════════════════════════════════════════════════════════════════════ */
-const LS_KEY = "gateai_verif_grinder_v1";
-const SYNC_KEY = "gateai_sync_url_v1";     // Apps Script-URL lagras separat (läcker ej via synk)
-let syncUrl = "";                          // sätts i init() från localStorage
-let syncTimer = null;                      // debounce-timer för molnpush
+/* ────────────────────────────────────────────────────────────────────────
+   Store — modulärt persistens-lager
+   ────────────────────────────────────────────────────────────────────────
+   All lagring går genom `Store`. Resten av appen anropar bara load()/save()
+   och bryr sig inte om VAR datan hamnar. Två backends idag:
+     • Lokalt → localStorage (snabb cache, alltid på)
+     • Moln   → Google Sheets via Apps Script (valfritt, aktiveras med URL)
+
+   👉 FRAMTID – flera användare:
+      Sätt `Store.namespace = <användar-id>` efter inloggning → separata
+      localStorage-nycklar per användare. Byt `cloudRead`/`cloudWrite` mot en
+      autentiserad API-klient med samma gränssnitt. Ingen övrig appkod ändras.
+   ──────────────────────────────────────────────────────────────────────── */
+const Store = {
+  BASE_KEY:  "gateai_verif_grinder_v1",
+  SYNC_KEY:  "gateai_sync_url_v1",   // Apps Script-URL lagras separat (läcker ej via synk)
+  namespace: "default",              // FRAMTID: byt till användar-id vid inloggning
+  syncUrl:   "",
+  _pushTimer: null,
+
+  // localStorage-nyckel (namespacad – "default" behåller den ursprungliga nyckeln)
+  localKey(){ return this.namespace === "default" ? this.BASE_KEY : this.BASE_KEY + ":" + this.namespace; },
+
+  // ── Lokal backend ──
+  readLocal(){
+    try{ const raw = localStorage.getItem(this.localKey()); return raw ? JSON.parse(raw) : null; }
+    catch(e){ console.warn("Store: kunde inte läsa lokalt:", e); return null; }
+  },
+  writeLocal(state){
+    try{ localStorage.setItem(this.localKey(), JSON.stringify(state)); }
+    catch(e){ console.warn("Store: kunde inte spara lokalt:", e); }
+  },
+
+  // ── Molnkonfiguration ──
+  loadSyncUrl(){ this.syncUrl = localStorage.getItem(this.SYNC_KEY) || ""; return this.syncUrl; },
+  saveSyncUrl(url){
+    this.syncUrl = url;
+    try{ localStorage.setItem(this.SYNC_KEY, url); }catch(e){}
+  },
+  cloudEnabled(){ return !!this.syncUrl; },
+
+  // ── Moln-backend (Google Sheets via Apps Script) ──
+  // text/plain undviker CORS-preflight som Apps Script inte hanterar.
+  cloudRead(){ return fetch(this.syncUrl, { method:"GET" }).then(r => r.json()); },
+  cloudWrite(payload){
+    return fetch(this.syncUrl, {
+      method:  "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body:    JSON.stringify(payload)
+    }).then(r => r.json());
+  },
+
+  // Debounce så att en snabb combo inte spammar molnet – pushar 2,5 s efter sista ändringen
+  schedulePush(fn){
+    if(!this.cloudEnabled()) return;
+    clearTimeout(this._pushTimer);
+    this._pushTimer = setTimeout(fn, 2500);
+  }
+};
 
 function todayKey(d){ // "YYYY-MM-DD" lokal tid
   d = d || new Date();
@@ -69,22 +142,21 @@ function freshState(){
 
 let S = load();
 
+/** Läser statet från lokal lagring och kompletterar med ev. nya standardfält. */
 function load(){
-  try{
-    const raw = localStorage.getItem(LS_KEY);
-    if(!raw) return freshState();
-    const parsed = JSON.parse(raw);
-    return Object.assign(freshState(), parsed);
-  }catch(e){ console.warn("Kunde inte läsa sparad data:", e); return freshState(); }
+  return Object.assign(freshState(), Store.readLocal() || {});
 }
+
+/**
+ * Sparar statet lokalt och (om molnsynk är på) schemalägger en molnpush.
+ * @param {{bump?: boolean}} [opts] bump=false vid data hämtad från molnet:
+ *        rör inte tidsstämpeln och pusha inte tillbaka.
+ */
 function save(opts){
   opts = opts || {};
-  // bump=true (standard) → detta är en lokal ändring: stämpla tid och schemalägg molnpush.
-  // bump=false → vi sparar data som hämtats från molnet; rör inte tidsstämpeln, pusha inte tillbaka.
   if(opts.bump !== false) S.updatedAt = Date.now();
-  try{ localStorage.setItem(LS_KEY, JSON.stringify(S)); }
-  catch(e){ console.warn("Kunde inte spara:", e); }
-  if(opts.bump !== false) schedulePush();
+  Store.writeLocal(S);
+  if(opts.bump !== false) Store.schedulePush(pushCloud);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -100,55 +172,42 @@ function setSyncStatus(txt){
 function nowClock(){
   return new Date().toLocaleTimeString("sv-SE", {hour:"2-digit", minute:"2-digit"});
 }
-// Debounce så att en snabb combo inte spammar molnet – pushar 2,5 s efter sista klicket
-function schedulePush(){
-  if(!syncUrl) return;
-  clearTimeout(syncTimer);
-  syncTimer = setTimeout(pushCloud, 2500);
-}
-// Skicka upp hela state till arket. text/plain undviker CORS-preflight (som Apps Script inte hanterar).
+// Skicka upp hela statet till molnet.
 function pushCloud(){
-  if(!syncUrl) return;
+  if(!Store.cloudEnabled()) return;
   setSyncStatus("Synkar…");
-  fetch(syncUrl, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ data: S, updatedAt: S.updatedAt })
-  })
-  .then(r => r.json())
-  .then(res => setSyncStatus(res && res.ok ? "Synkad "+nowClock() : "Synkfel – sparat lokalt"))
-  .catch(() => setSyncStatus("Offline – sparat lokalt"));
+  Store.cloudWrite({ data: S, updatedAt: S.updatedAt })
+    .then(res => setSyncStatus(res && res.ok ? "Synkad "+nowClock() : "Synkfel – sparat lokalt"))
+    .catch(() => setSyncStatus("Offline – sparat lokalt"));
 }
-// Hämta från molnet vid start / manuell synk. Nyare tidsstämpel vinner.
+// Hämta från molnet vid start / manuell synk. Nyare tidsstämpel vinner (last-write-wins).
 function pullCloud(){
-  if(!syncUrl){ setSyncStatus("Ej konfigurerad"); return; }
+  if(!Store.cloudEnabled()){ setSyncStatus("Ej konfigurerad"); return; }
   setSyncStatus("Hämtar…");
-  fetch(syncUrl, { method: "GET" })
-  .then(r => r.json())
-  .then(res => {
-    if(res && res.ok && res.data && (res.updatedAt||0) > (S.updatedAt||0)){
-      // Molnet är nyare → anta molnets data (spara lokalt utan att pusha tillbaka)
-      S = Object.assign(freshState(), res.data);
-      save({bump:false});
-      reconcileStreak();
-      refreshEverything();
-      setSyncStatus("Synkad – hämtad "+nowClock());
-    } else {
-      // Lokalt är nyare eller lika → pusha upp lokalt
-      pushCloud();
-    }
-  })
-  .catch(() => setSyncStatus("Offline – kör lokalt"));
+  Store.cloudRead()
+    .then(res => {
+      if(res && res.ok && res.data && (res.updatedAt||0) > (S.updatedAt||0)){
+        // Molnet är nyare → anta molnets data (spara lokalt utan att pusha tillbaka)
+        S = Object.assign(freshState(), res.data);
+        save({bump:false});
+        reconcileStreak();
+        refreshEverything();
+        setSyncStatus("Synkad – hämtad "+nowClock());
+      } else {
+        // Lokalt är nyare eller lika → pusha upp lokalt
+        pushCloud();
+      }
+    })
+    .catch(() => setSyncStatus("Offline – kör lokalt"));
 }
 function syncNow(){
-  if(!syncUrl){ setSyncStatus("Ingen URL angiven"); return; }
+  if(!Store.cloudEnabled()){ setSyncStatus("Ingen URL angiven"); return; }
   pullCloud();
 }
-// Sparar/uppdaterar Apps Script-URL:en (från Inställningar) och synkar direkt
+// Sparar/uppdaterar Apps Script-URL:en (från Inställningar) och synkar direkt.
 function saveSyncUrl(){
   const v = (document.getElementById("setSyncUrl").value || "").trim();
-  syncUrl = v;
-  try{ localStorage.setItem(SYNC_KEY, v); }catch(e){}
+  Store.saveSyncUrl(v);
   if(v){ setSyncStatus("Sparad – synkar…"); pullCloud(); }
   else  { setSyncStatus("Ej konfigurerad"); }
 }
@@ -838,8 +897,8 @@ function openSettings(){
   document.getElementById("setGoal").value = S.goal;
   document.getElementById("setSound").checked = !S.muted;
   document.getElementById("setReduce").checked = S.reduceMotion;
-  document.getElementById("setSyncUrl").value = syncUrl;
-  setSyncStatus(syncUrl ? "Konfigurerad" : "Ej konfigurerad");
+  document.getElementById("setSyncUrl").value = Store.syncUrl;
+  setSyncStatus(Store.syncUrl ? "Konfigurerad" : "Ej konfigurerad");
   document.getElementById("settingsBg").classList.add("show");
 }
 function closeSettings(){ document.getElementById("settingsBg").classList.remove("show"); }
@@ -896,7 +955,7 @@ document.getElementById("importFile").addEventListener("change", e=>{
 function hardReset(){
   if(!confirm("Är du säker? Detta raderar ALL din grind-data permanent (den riktiga bokföringen i Spiris påverkas inte).")) return;
   if(!confirm("Helt säker? Detta går inte att ångra. Exportera en backup först om du är osäker.")) return;
-  localStorage.removeItem(LS_KEY);
+  localStorage.removeItem(Store.localKey());
   location.reload();
 }
 
@@ -931,7 +990,7 @@ function init(){
     if(e.target.id==="tipsBg") closeTips();
   });
   // Molnsynk: läs ev. sparad Apps Script-URL och hämta från molnet vid start
-  syncUrl = localStorage.getItem(SYNC_KEY) || "";
-  if(syncUrl) pullCloud();
+  Store.loadSyncUrl();
+  if(Store.cloudEnabled()) pullCloud();
 }
 init();
