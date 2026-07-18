@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Verifikations-grinder ⚡ Gate AI</title>
+
+<!-- ══════════════════════════════════════════════════════════════════════
+     CDN-BIBLIOTEK (fungerar när du är online; appen funkar även offline
+     men då utan diagram/konfetti-lib – då används inbyggd fallback).
+     ══════════════════════════════════════════════════════════════════════ -->
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
+
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ══════════ TOAST-ZON & OVERLAYS ══════════ -->
+<div class="toast-zone" id="toastZone"></div>
+
+<div class="levelup" id="levelup">
+  <div class="box">
+    <div class="big">LEVEL UP!</div>
+    <div class="lvl" id="luLevel">Level 2</div>
+    <div class="rank" id="luRank">Verifikationsväktare</div>
+    <div class="hint">Klicka var som helst för att fortsätta grinden ⚡</div>
+  </div>
+</div>
+
+<!-- INSTÄLLNINGS-MODAL -->
+<div class="modal-bg" id="settingsBg">
+  <div class="card modal">
+    <button class="close-x" onclick="closeSettings()">×</button>
+    <h2>⚙️ Inställningar</h2>
+    <div class="desc" style="margin-bottom:6px">All data lagras lokalt i din webbläsare (localStorage).</div>
+
+    <div class="row">
+      <div><label>Målantal verifikationer</label><div class="desc">För verksamhetsåret 25/26</div></div>
+      <input type="number" id="setGoal" min="1" max="100000">
+    </div>
+    <div class="row">
+      <div><label>Ljud</label><div class="desc">Pop / mynt / chime vid klick</div></div>
+      <div class="switch"><input type="checkbox" id="setSound"><span class="sl" onclick="this.previousElementSibling.click()"></span></div>
+    </div>
+    <div class="row">
+      <div><label>Reducera rörelse</label><div class="desc">Dämpar animationer & konfetti</div></div>
+      <div class="switch"><input type="checkbox" id="setReduce"><span class="sl" onclick="this.previousElementSibling.click()"></span></div>
+    </div>
+
+    <div class="section-title" style="margin-top:22px">☁️ Molnsynk (Google Sheets)</div>
+    <div style="padding-top:4px">
+      <div class="desc" style="margin-bottom:8px">Klistra in din Apps Script-URL för att synka mellan datorer. Lämna tom för att bara spara lokalt.</div>
+      <input type="text" id="setSyncUrl" placeholder="https://script.google.com/macros/s/.../exec">
+      <div style="display:flex; gap:12px; align-items:center; margin-top:10px">
+        <button class="mbtn" onclick="syncNow()" style="width:auto; padding:9px 16px">🔄 Synka nu</button>
+        <span class="desc" id="syncStatus">Ej konfigurerad</span>
+      </div>
+    </div>
+
+    <div class="section-title" style="margin-top:22px">Säkerhetskopiering</div>
+    <div class="row" style="border:none; padding-top:4px; gap:10px">
+      <button class="mbtn" onclick="exportData()">⬇️ Exportera JSON</button>
+      <button class="mbtn" onclick="document.getElementById('importFile').click()">⬆️ Importera JSON</button>
+    </div>
+    <input type="file" id="importFile" accept="application/json" style="display:none">
+
+    <div class="section-title">Farlig zon</div>
+    <div class="row" style="border:none; padding-top:4px">
+      <button class="mbtn danger" onclick="hardReset()">🗑️ Nollställ all data</button>
+    </div>
+  </div>
+</div>
+
+<!-- TIPS-MODAL -->
+<div class="modal-bg" id="tipsBg">
+  <div class="card modal">
+    <button class="close-x" onclick="closeTips()">×</button>
+    <h2>💡 Tips</h2>
+    <div class="desc" style="margin-bottom:8px">Små knep för att grinda snabbare och roligare.</div>
+
+    <div class="tip-item"><div class="ic">⌨️</div><div class="tx"><b>Snabb-bokför:</b> tryck <b>Mellanslag</b> eller <b>Enter</b> istället för att klicka – perfekt när du har många verifikationer på rad.</div></div>
+    <div class="tip-item"><div class="ic">🔥</div><div class="tx"><b>Combo:</b> bokför flera gånger inom 4 sekunder så bygger du en combo-multiplikator (x2, x3 …) som ger mer XP och kraftfullare effekter.</div></div>
+    <div class="tip-item"><div class="ic">💥</div><div class="tx"><b>Critical:</b> ungefär var åttonde klick ger en <b>CRITICAL</b> med extra XP och eget ljud – ren tur!</div></div>
+    <div class="tip-item"><div class="ic">📅</div><div class="tx"><b>Streak:</b> bokför minst en verifikation varje dag för att hålla din streak vid liv och tjäna bonus-XP.</div></div>
+    <div class="tip-item"><div class="ic">↩️</div><div class="tx"><b>Ångra:</b> klickade du fel? Knappen <b>Ångra</b> tar bort din senaste bokföring.</div></div>
+    <div class="tip-item"><div class="ic">🎯</div><div class="tx"><b>Ditt mål:</b> ändra målantalet verifikationer under <b>Inställningar</b> när som helst.</div></div>
+    <div class="tip-item"><div class="ic">💾</div><div class="tx"><b>Säkerhetskopiera:</b> exportera din data som JSON då och då – localStorage kan vara skört, särskilt på file://.</div></div>
+    <div class="tip-item"><div class="ic">🏆</div><div class="tx"><b>Klättra:</b> fortsätt bokföra för att gå upp i level, låsa nya rangtitlar och plocka achievements.</div></div>
+  </div>
+</div>
+
+<div class="wrap">
+  <!-- ══════════ TOPPBAR ══════════ -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">⚡</div>
+      <div>
+        <h1>Verifikations<span>-grinder</span></h1>
+      </div>
+    </div>
+    <div class="toolbar">
+      <button class="tbtn" onclick="openTips()">💡 Tips</button>
+      <button class="tbtn" id="muteBtn" onclick="toggleMute()">🔊 Ljud</button>
+      <button class="tbtn" onclick="undoLast()" id="undoBtn">↩️ Ångra</button>
+      <button class="tbtn" onclick="openSettings()">⚙️ Inställningar</button>
+    </div>
+  </header>
+
+  <!-- ══════════ TOPP: HERO-KNAPP + PROGRESS-RING ══════════ -->
+  <div class="grid g-hero" style="margin-bottom:18px">
+
+    <!-- ══ VÄNSTER KOLUMN: Mål + Totalt (samma data, olika vy) ══ -->
+    <div class="hero-col" style="order:1">
+
+    <!-- Progress-ring -->
+    <div class="card ring-card">
+      <h2>🎯 Mål</h2>
+      <div class="fill-center">
+      <div class="ring-holder">
+        <svg width="230" height="230" viewBox="0 0 230 230">
+          <defs>
+            <linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%"  stop-color="#FFB14A"/>
+              <stop offset="35%" stop-color="#FF4FD8"/>
+              <stop offset="70%" stop-color="#7A3CFF"/>
+              <stop offset="100%" stop-color="#2BB6FF"/>
+            </linearGradient>
+          </defs>
+          <circle cx="115" cy="115" r="100" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="18"/>
+          <circle id="ringProg" cx="115" cy="115" r="100" fill="none" stroke="url(#ringGrad)"
+                  stroke-width="18" stroke-linecap="round"
+                  stroke-dasharray="628.3" stroke-dashoffset="628.3"
+                  style="transition:stroke-dashoffset .8s cubic-bezier(.2,.9,.2,1); filter:drop-shadow(0 0 6px rgba(255,79,216,.5))"/>
+        </svg>
+        <div class="ring-center">
+          <div class="pct" id="ringPct">0%</div>
+          <div class="frac" id="ringFrac">0 / 250</div>
+          <div class="left" id="ringLeft">250 kvar</div>
+        </div>
+      </div>
+      </div><!-- /fill-center -->
+    </div>
+
+    <!-- Totalt: samma framsteg som cirkeln fast som råsiffra -->
+    <div class="card total-card">
+      <h2>📊 Totalt</h2>
+      <div class="fill-center">
+        <div class="total-hero">
+          <div class="rank-name grad" id="bigTotal" style="font-size:64px; line-height:1">0</div>
+          <div class="total-cap">bokförda verifikationer</div>
+        </div>
+        <div class="stat-row">
+          <div class="stat"><div class="n" id="statToday">0</div><div class="k">Idag</div></div>
+          <div class="stat"><div class="n" id="statBest">0</div><div class="k">Bästa dag</div></div>
+          <div class="stat"><div class="n" id="statDays">0</div><div class="k">Aktiva dagar</div></div>
+        </div>
+      </div>
+    </div>
+
+    </div><!-- /vänster hero-col -->
+
+    <!-- ══ MITTEN: Stora bokföringsknappen (fyller höjden) ══ -->
+    <div class="card hero" style="order:2">
+      <div class="combo-wrap" id="comboWrap">
+        <span class="combo-x" id="comboX">x1</span>
+        <div class="combo-bar"><i id="comboBar"></i></div>
+        <span style="font-size:13px; color:var(--txt-dim)">COMBO</span>
+      </div>
+
+      <div class="btn-zone">
+        <button class="big-btn" id="bigBtn">
+          <span class="lbl">BOKFÖR</span>
+        </button>
+      </div>
+
+      <div class="hero-bottom">
+        <div class="today-line">Idag: <b id="todayCount">0</b> &nbsp;·&nbsp; Bästa dag: <b id="bestDay">0</b></div>
+      </div>
+    </div>
+
+    <!-- ══ HÖGER KOLUMN: Rang & Level + Framstegs-carousel ══ -->
+    <div class="hero-col" style="order:3">
+
+    <!-- Level -->
+    <div class="card level-card">
+      <h2>🏆 Rang & Level</h2>
+      <div class="fill-center">
+        <div class="rank-name grad" id="rankName">Kvittonovis</div>
+        <div class="level-line" id="levelLine">Level 1</div>
+        <div class="xpbar"><i id="xpFill"></i></div>
+        <div class="xp-nums"><span id="xpCur">0 XP</span><span id="xpNeed">100 XP</span></div>
+        <div class="stat-row">
+          <div class="stat"><div class="n grad" id="totalXP">0</div><div class="k">Total XP</div></div>
+          <div class="stat"><div class="n" id="critCount">0</div><div class="k">Criticals</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Framstegs-carousel: förhandsvisar övriga segment, roterar var 10:e sek -->
+    <div class="card carousel-card">
+      <!-- Delade gradienter för sparklines -->
+      <svg width="0" height="0" style="position:absolute"><defs>
+        <linearGradient id="sparkGrad" x1="0" y1="1" x2="0" y2="0">
+          <stop offset="0" stop-color="#2BB6FF"/><stop offset="1" stop-color="#FF4FD8"/></linearGradient>
+        <linearGradient id="sparkLineGrad" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0" stop-color="#FFB14A"/><stop offset=".5" stop-color="#FF4FD8"/><stop offset="1" stop-color="#2BB6FF"/></linearGradient>
+      </defs></svg>
+      <div class="carousel" id="carousel">
+        <div class="car-slides" id="carSlides"></div>
+      </div>
+      <div class="car-dots" id="carDots"></div>
+    </div>
+
+    </div><!-- /höger hero-col -->
+  </div><!-- /g-hero -->
+
+  <!-- ══════════ STREAK + XP ÖVER TID (sida vid sida) ══════════ -->
+  <div class="grid g-2" style="margin-bottom:18px">
+
+    <!-- Streak -->
+    <div class="card">
+      <h2>🔥 Streak</h2>
+      <div class="streak-top">
+        <div class="streak-flame">🔥</div>
+        <div>
+          <div style="font-size:30px; font-weight:700" id="streakCur">0 dagar</div>
+          <div style="font-size:13px; color:var(--txt-dim)">Längsta: <b id="streakBest" style="color:var(--txt)">0</b> dagar</div>
+        </div>
+      </div>
+      <div class="heatmap" id="heatmap"></div>
+      <div class="hm-legend">
+        Mindre
+        <span class="hm-cell"></span>
+        <span class="hm-cell" data-l="1"></span>
+        <span class="hm-cell" data-l="2"></span>
+        <span class="hm-cell" data-l="3"></span>
+        Mer
+      </div>
+    </div>
+
+    <!-- XP över tid -->
+    <div class="card"><h2>✨ XP över tid</h2><div class="chart-box"><canvas id="chartXP"></canvas></div></div>
+  </div>
+
+  <!-- ══════════ DIAGRAM: per dag + burnup ══════════ -->
+  <div class="grid g-2" style="margin-bottom:18px">
+    <div class="card"><h2>📅 Verifikationer per dag</h2><div class="chart-box"><canvas id="chartDaily"></canvas></div></div>
+    <div class="card"><h2>🚀 Kumulativt mot målet (burnup)</h2><div class="chart-box"><canvas id="chartBurnup"></canvas></div></div>
+  </div>
+
+  <!-- ══════════ ACHIEVEMENTS ══════════ -->
+  <div class="card">
+    <h2>🎖️ Achievements</h2>
+    <div class="ach-grid" id="achGrid"></div>
+  </div>
+
+  <div class="footer-note">
+    Byggd i Gate AI-färger · Alla siffror är bara motivation – din riktiga bokföring lever i Spiris.<br>
+    Tips: exportera JSON då och då som backup (localStorage på <code>file://</code> kan vara skört).
+  </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
