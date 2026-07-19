@@ -81,7 +81,8 @@
     <div class="desc" style="margin-bottom:8px">Små knep för att grinda snabbare och roligare.</div>
 
     <div class="tip-item"><div class="ic">⌨️</div><div class="tx"><b>Snabb-bokför:</b> tryck <b>Mellanslag</b> eller <b>Enter</b> istället för att klicka – perfekt när du har många verifikationer på rad.</div></div>
-    <div class="tip-item"><div class="ic">🔥</div><div class="tx"><b>Combo:</b> bokför flera gånger inom 4 sekunder så bygger du en combo-multiplikator (x2, x3 …) som ger mer XP och kraftfullare effekter.</div></div>
+    <div class="tip-item"><div class="ic">🌊</div><div class="tx"><b>Flöde:</b> logga i jämn takt – en verifikation → bokför → nästa – så byggs ett flöde upp som ger multiplikator och färsk-bonus. Snabb-spam (batchning) ger inget, så det lönar sig att bokföra löpande direkt när du gjort dem.</div></div>
+    <div class="tip-item"><div class="ic">🔁</div><div class="tx"><b>Löpande bokförare:</b> sprid ut dina registreringar över dagen – bokför över minst 3 olika timmar samma dag för att låsa upp den här achievementen.</div></div>
     <div class="tip-item"><div class="ic">💥</div><div class="tx"><b>Critical:</b> ungefär var åttonde klick ger en <b>CRITICAL</b> med extra XP och eget ljud – ren tur!</div></div>
     <div class="tip-item"><div class="ic">📅</div><div class="tx"><b>Streak:</b> bokför minst en verifikation varje dag för att hålla din streak vid liv och tjäna bonus-XP.</div></div>
     <div class="tip-item"><div class="ic">↩️</div><div class="tx"><b>Ångra:</b> klickade du fel? Knappen <b>Ångra</b> tar bort din senaste bokföring.</div></div>
@@ -164,9 +165,9 @@
     <!-- ══ MITTEN: Stora bokföringsknappen (fyller höjden) ══ -->
     <div class="card hero" style="order:2">
       <div class="combo-wrap" id="comboWrap">
-        <span class="combo-x" id="comboX">x1</span>
-        <div class="combo-bar"><i id="comboBar"></i></div>
-        <span style="font-size:13px; color:var(--txt-dim)">COMBO</span>
+        <span class="combo-x" id="comboX">×1.0</span>
+        <div class="combo-bar"><i id="comboBar" style="transform:scaleX(0)"></i></div>
+        <span style="font-size:13px; color:var(--txt-dim)">FLÖDE</span>
       </div>
 
       <div class="btn-zone">

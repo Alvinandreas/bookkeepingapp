@@ -21,8 +21,16 @@
    ══════════════════════════════════════════════════════════════════════════ */
 const TUNE = {
   XP_PER_VERIF:    10,    // Bas-XP per bokförd verifikation
-  COMBO_WINDOW:    4000,  // ms mellan klick för att bygga combo (4 sek)
-  COMBO_MAX:       10,    // Maxtak på combo-multiplikatorn
+
+  // ── FLÖDE (ersätter combo) – belönar löpande, jämnt spacad registrering ──
+  // Snabbare än MIN_GAP räknas som "batchning" och bygger INTE flöde (och ger ingen
+  // färsk-bonus). Poängen: logga varje verifikation direkt istället för att spara ihop.
+  FLOW_MIN_GAP:    5000,     // ms – klick snabbare än så = batchning (ingen bonus)
+  FLOW_MAX_GAP:    480000,   // ms – längre paus än så (8 min) nollställer flödet
+  FLOW_MAX:        8,        // högsta flödesnivå
+  FLOW_MULT_MAX:   2,        // multiplikator vid maximalt flöde (mild – batchning lönar sig aldrig)
+  FRESH_BONUS:     5,        // färsk-bonus: extra XP varje gång du loggar i lagom takt
+
   CRIT_CHANCE:     0.13,  // Sannolikhet för CRITICAL (0.13 = 13 %)
   CRIT_MULT:       3,     // XP-multiplikator vid critical
   STREAK_BONUS_XP: 5,     // Fast bonus-XP per klick när en streak (>1 dag) är aktiv
@@ -260,8 +268,8 @@ function beep(freqs, dur, type, gain){
   });
 }
 // Olika ljud för olika händelser:
-function soundPop(combo){       // klick – tonhöjd stiger med combo
-  const base = 440 + Math.min(combo,10)*40;
+function soundPop(level){       // klick – tonhöjd stiger med flödesnivån
+  const base = 440 + Math.min(level,10)*40;
   beep([base, base*1.5], 0.16, "triangle", 0.14);
 }
 function soundCrit(){ beep([660,880,1320,1760], 0.28, "sawtooth", 0.13); }
@@ -294,43 +302,58 @@ function bigCelebration(){
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   🔥  COMBO-SYSTEM
-   ══════════════════════════════════════════════════════════════════════════ */
-let combo = 0;           // nuvarande combo-multiplikator
-let lastClickTime = 0;
-let comboTimer = null;
-let comboBarRAF = null;
+   🌊  FLÖDES-SYSTEM  (ersätter combo)
+   ────────────────────────────────────────────────────────────────────────
+   Belönar JÄMN TAKT, inte hastighet. Varje registrering i lagom takt
+   (en verifikation → bokför → nästa) bygger flöde och ger en färsk-bonus.
+   Klick snabbare än FLOW_MIN_GAP tolkas som batchning: bygger inget flöde
+   och ger bara bas-XP → det lönar sig aldrig att spara ihop registreringar.
+   En lång paus (FLOW_MAX_GAP) nollställer flödet.
 
-function registerCombo(){
+   OBS: appen kan inte se Spiris, så vi belönar ett *mönster* (jämn kadens)
+   som korrelerar med att logga löpande – inte den exakta Spiris-tiden.
+   ══════════════════════════════════════════════════════════════════════════ */
+let flow = 0;            // nuvarande flödesnivå (0..FLOW_MAX)
+let lastClickTime = 0;   // performance.now() för föregående registrering
+let flowTimer = null;    // nollställer flödet efter lång inaktivitet
+
+/**
+ * Registrerar en klickning och uppdaterar flödet.
+ * @returns {boolean} true om klicket var "färskt" (lagom takt) → ger flödesbonus.
+ */
+function registerFlow(){
   const now = performance.now();
-  if(now - lastClickTime <= TUNE.COMBO_WINDOW){
-    combo = Math.min(combo+1, TUNE.COMBO_MAX);
-  } else {
-    combo = 1;
-  }
+  const gap = now - lastClickTime;
   lastClickTime = now;
-  updateComboUI();
-  startComboCountdown();
-  return combo;
+
+  let fresh;
+  if(gap > TUNE.FLOW_MAX_GAP){
+    flow = 1; fresh = true;                                  // lång paus → nytt flöde börjar
+  } else if(gap >= TUNE.FLOW_MIN_GAP){
+    flow = Math.min(flow + 1, TUNE.FLOW_MAX); fresh = true;  // lagom takt → bygg flöde
+  } else {
+    fresh = false;                                           // för snabbt (batchning) → ingen bonus
+  }
+  updateFlowUI();
+  scheduleFlowReset();
+  return fresh;
 }
-function startComboCountdown(){
-  clearTimeout(comboTimer);
-  comboTimer = setTimeout(()=>{ combo=0; updateComboUI(); }, TUNE.COMBO_WINDOW);
-  // Animera combo-baren som en nedräkning
-  cancelAnimationFrame(comboBarRAF);
-  const start = performance.now();
-  const bar = document.getElementById("comboBar");
-  (function tick(){
-    const elapsed = performance.now()-start;
-    const frac = Math.max(0, 1 - elapsed/TUNE.COMBO_WINDOW);
-    bar.style.transform = "scaleX("+frac+")";
-    if(frac>0 && combo>0) comboBarRAF = requestAnimationFrame(tick);
-  })();
+// Multiplikator härledd ur flödesnivån (1.0 vid nivå ≤1, upp till FLOW_MULT_MAX vid max).
+function flowMult(){
+  if(flow <= 1) return 1;
+  return Math.min(TUNE.FLOW_MULT_MAX,
+                  1 + (flow - 1) * (TUNE.FLOW_MULT_MAX - 1) / (TUNE.FLOW_MAX - 1));
 }
-function updateComboUI(){
+function scheduleFlowReset(){
+  clearTimeout(flowTimer);
+  flowTimer = setTimeout(()=>{ flow = 0; updateFlowUI(); }, TUNE.FLOW_MAX_GAP);
+}
+function updateFlowUI(){
   const wrap = document.getElementById("comboWrap");
-  document.getElementById("comboX").textContent = "x"+Math.max(combo,1);
-  wrap.classList.toggle("on", combo>=2);
+  document.getElementById("comboX").textContent = "×" + flowMult().toFixed(1);
+  // Mätaren fylls med flödesnivån (ingen nedräkning – flödet hålls så länge du är i takt)
+  document.getElementById("comboBar").style.transform = "scaleX(" + (flow / TUNE.FLOW_MAX) + ")";
+  wrap.classList.toggle("on", flow >= 2);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -342,11 +365,16 @@ bigBtn.addEventListener("click", handleBokford);
 function handleBokford(ev){
   const now = new Date();
   const day = todayKey(now);
-  const mult = registerCombo();
+
+  // Flöde: färska (lagom spacade) klick ger multiplikator + färsk-bonus.
+  // Batchning (för snabba klick) ger bara bas-XP.
+  const fresh = registerFlow();
+  const mult  = fresh ? flowMult() : 1;
 
   // Critical?
   const isCrit = Math.random() < TUNE.CRIT_CHANCE;
   let gained = TUNE.XP_PER_VERIF * mult;
+  if(fresh) gained += TUNE.FRESH_BONUS;                 // färsk-bonus för löpande loggning
   if(isCrit){ gained *= TUNE.CRIT_MULT; S.critCount++; }
   // Streak-bonus (liten extra XP om man har en pågående streak)
   if(S.streakCur > 1) gained += TUNE.STREAK_BONUS_XP;
@@ -368,9 +396,11 @@ function handleBokford(ev){
   const prevLevel = S.level;
   S.total++;
   S.xp += gained;
-  if(!S.byDay[day]) S.byDay[day] = {count:0, xp:0};
+  if(!S.byDay[day]) S.byDay[day] = {count:0, xp:0, hours:{}};
+  if(!S.byDay[day].hours) S.byDay[day].hours = {};      // bakåtkompatibilitet med äldre data
   S.byDay[day].count++;
   S.byDay[day].xp += gained;
+  S.byDay[day].hours[now.getHours()] = true;            // för "Löpande bokförare"-achievement
   if(S.byDay[day].count > S.bestDay) S.bestDay = S.byDay[day].count;
   S.level = levelFromXP(S.xp);
   S.xpLog.push({t: now.getTime(), xp: S.xp});
@@ -388,13 +418,13 @@ function handleBokford(ev){
   const ox = (btnRect.left+btnRect.width/2)/window.innerWidth;
   const oy = (btnRect.top+btnRect.height/2)/window.innerHeight;
 
-  const intensity = Math.min(mult, TUNE.COMBO_MAX) * (isCrit?1.6:1);
+  const intensity = Math.min(flow, TUNE.FLOW_MAX) * (isCrit?1.6:1);
   burstConfetti(intensity/2, {x:ox, y:oy});
 
   floatXP(gained, btnRect, isCrit, mult);
 
   if(isCrit){ soundCrit(); critBurst(btnRect); }
-  else soundPop(mult);
+  else soundPop(flow);
 
   // Count-up + all UI
   animateCountUp();
@@ -423,7 +453,7 @@ function pressAnimation(){
 function floatXP(amount, rect, crit, mult){
   const el = document.createElement("div");
   el.className = "float-xp";
-  el.textContent = "+"+amount+" XP" + (mult>1?"  x"+mult:"");
+  el.textContent = "+"+amount+" XP" + (mult>1?"  ×"+mult.toFixed(1):"");
   el.style.left = (rect.left+rect.width/2) + "px";
   el.style.top  = (rect.top+rect.height*0.28) + "px";
   el.style.color = crit ? "#FFB14A" : "#fff";
@@ -481,8 +511,9 @@ const ACHIEVEMENTS = [
   {id:"t100",    ic:"💯", t:"Hundraklubben",     d:"100 bokförda",                      test:()=>S.total>=100},
   {id:"half",    ic:"🌗", t:"Halvvägs",          d:"Halvvägs till målet",               test:()=>S.total>=S.goal/2},
   {id:"goal",    ic:"🏁", t:"Målet klart!",      d:"Nådde årets mål",                   test:()=>S.total>=S.goal},
-  {id:"combo5",  ic:"⚡", t:"Combo-kung",        d:"Nå x5 combo",                       test:()=>combo>=5},
-  {id:"combo10", ic:"🌀", t:"Combo-galning",     d:"Nå max combo",                      test:()=>combo>=TUNE.COMBO_MAX},
+  {id:"flow4",   ic:"⚡", t:"Flödesbyggare",     d:"Nå flöde ×1.6",                     test:()=>flowMult()>=1.5},
+  {id:"flowmax", ic:"🌊", t:"Flödesmästare",     d:"Nå maximalt flöde",                 test:()=>flow>=TUNE.FLOW_MAX},
+  {id:"steady",  ic:"🔁", t:"Löpande bokförare",  d:"Bokför spritt över minst 3 timmar samma dag", test:()=>{ const d=S.byDay[todayKey()]; return !!(d && d.hours && Object.keys(d.hours).length>=3); }},
   {id:"fast10",  ic:"🚄", t:"Grinder-läge",      d:"10 på 5 minuter",                   test:()=>S.firstMinuteBurst.length>=10},
   {id:"crit",    ic:"💥", t:"Första criten",     d:"Få en CRITICAL",                    test:()=>S.critCount>=1},
   {id:"night",   ic:"🦉", t:"Nattugglan",        d:"Bokför efter kl 22:00",             test:(now)=>now && now.getHours()>=22},
@@ -885,7 +916,7 @@ function undoLast(){
   S.streakCur = h.prevStreakCur; S.streakBest = h.prevStreakBest; S.lastActiveDay = h.prevLastActive;
   if(S.xpLog.length) S.xpLog.pop();
   save();
-  combo=0; updateComboUI();
+  flow=0; updateFlowUI();
   renderAll(false);
   showToast("↩️","Ångrat","Senaste bokföring borttagen");
 }

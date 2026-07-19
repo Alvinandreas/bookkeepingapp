@@ -131,7 +131,7 @@ header.topbar{
 .combo-bar{width:150px; height:7px; border-radius:4px; background:rgba(255,255,255,.1);
   overflow:hidden}
 .combo-bar > i{display:block; height:100%; width:100%; background:var(--grad);
-  transform-origin:left; transition:transform .1s linear}
+  transform-origin:left; transition:transform .35s cubic-bezier(.2,.9,.2,1)}
 
 /* Den gigantiska knappen */
 .big-btn{
