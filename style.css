@@ -35,6 +35,14 @@ body{
   overflow-x:hidden;
   min-height:100vh;
   position:relative;
+  /* Klick-app: förhindra att snabba klick markerar UI-text (t.ex. level-up-texten) */
+  -webkit-user-select:none;
+  user-select:none;
+}
+/* …men låt inmatningsfält och modaltext vara markerbara (kopiera URL, tips m.m.) */
+input, textarea, .modal{
+  -webkit-user-select:text;
+  user-select:text;
 }
 
 /* Subtil animerad gradient-bakgrund */
