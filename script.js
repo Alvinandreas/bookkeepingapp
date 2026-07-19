@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════════════════════
-   Verifikations-grinder — applogik
+   Bokföringsappen — applogik
    ────────────────────────────────────────────────────────────────────────────
    Vanilla JS, ingen byggkedja. Laddas som klassiskt <script> sist i <body>.
 
@@ -9,7 +9,7 @@
      3. State .............. freshState/load/save + molnsynk
      4. Level-matematik .... XP-kurva och rangtitlar
      5. Ljud / konfetti .... effekter
-     6. Kärnloop ........... handleBokford (klick → XP, combo, critical, render)
+     6. Kärnloop ........... handleBokford (klick → XP, flow-state, critical, render)
      7. Streak / achievements
      8. Rendering .......... dashboards, diagram (Chart.js), carousell
      9. Inställningar ...... modaler, export/import, reset
@@ -22,13 +22,13 @@
 const TUNE = {
   XP_PER_VERIF:    10,    // Bas-XP per bokförd verifikation
 
-  // ── FLÖDE (ersätter combo) – belönar löpande, jämnt spacad registrering ──
-  // Snabbare än MIN_GAP räknas som "batchning" och bygger INTE flöde (och ger ingen
+  // ── FLOW-STATE (ersätter combo) – belönar löpande, jämnt spacad registrering ──
+  // Snabbare än MIN_GAP räknas som "batchning" och bygger INTE Flow-state (och ger ingen
   // färsk-bonus). Poängen: logga varje verifikation direkt istället för att spara ihop.
   FLOW_MIN_GAP:    5000,     // ms – klick snabbare än så = batchning (ingen bonus)
-  FLOW_MAX_GAP:    480000,   // ms – längre paus än så (8 min) nollställer flödet
-  FLOW_MAX:        8,        // högsta flödesnivå
-  FLOW_MULT_MAX:   2,        // multiplikator vid maximalt flöde (mild – batchning lönar sig aldrig)
+  FLOW_MAX_GAP:    480000,   // ms – längre paus än så (8 min) nollställer Flow-state
+  FLOW_MAX:        8,        // högsta Flow-state-nivå
+  FLOW_MULT_MAX:   2,        // multiplikator vid maximalt Flow-state (mild – batchning lönar sig aldrig)
   FRESH_BONUS:     5,        // färsk-bonus: extra XP varje gång du loggar i lagom takt
 
   CRIT_CHANCE:     0.13,  // Sannolikhet för CRITICAL (0.13 = 13 %)
@@ -113,7 +113,7 @@ const Store = {
     }).then(r => r.json());
   },
 
-  // Debounce så att en snabb combo inte spammar molnet – pushar 2,5 s efter sista ändringen
+  // Debounce så att en snabb registrering inte spammar molnet – pushar 2,5 s efter sista ändringen
   schedulePush(fn){
     if(!this.cloudEnabled()) return;
     clearTimeout(this._pushTimer);
@@ -268,7 +268,7 @@ function beep(freqs, dur, type, gain){
   });
 }
 // Olika ljud för olika händelser:
-function soundPop(level){       // klick – tonhöjd stiger med flödesnivån
+function soundPop(level){       // klick – tonhöjd stiger med Flow-state-nivån
   const base = 440 + Math.min(level,10)*40;
   beep([base, base*1.5], 0.16, "triangle", 0.14);
 }
@@ -302,24 +302,24 @@ function bigCelebration(){
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   🌊  FLÖDES-SYSTEM  (ersätter combo)
+   🌊  FLOW-STATE-SYSTEM  (ersätter combo)
    ────────────────────────────────────────────────────────────────────────
    Belönar JÄMN TAKT, inte hastighet. Varje registrering i lagom takt
-   (en verifikation → bokför → nästa) bygger flöde och ger en färsk-bonus.
-   Klick snabbare än FLOW_MIN_GAP tolkas som batchning: bygger inget flöde
+   (en verifikation → bokför → nästa) bygger Flow-state och ger en färsk-bonus.
+   Klick snabbare än FLOW_MIN_GAP tolkas som batchning: bygger inget Flow-state
    och ger bara bas-XP → det lönar sig aldrig att spara ihop registreringar.
-   En lång paus (FLOW_MAX_GAP) nollställer flödet.
+   En lång paus (FLOW_MAX_GAP) nollställer Flow-state.
 
    OBS: appen kan inte se Spiris, så vi belönar ett *mönster* (jämn kadens)
    som korrelerar med att logga löpande – inte den exakta Spiris-tiden.
    ══════════════════════════════════════════════════════════════════════════ */
-let flow = 0;            // nuvarande flödesnivå (0..FLOW_MAX)
+let flow = 0;            // nuvarande Flow-state-nivå (0..FLOW_MAX)
 let lastClickTime = 0;   // performance.now() för föregående registrering
-let flowTimer = null;    // nollställer flödet efter lång inaktivitet
+let flowTimer = null;    // nollställer Flow-state efter lång inaktivitet
 
 /**
- * Registrerar en klickning och uppdaterar flödet.
- * @returns {boolean} true om klicket var "färskt" (lagom takt) → ger flödesbonus.
+ * Registrerar en klickning och uppdaterar Flow-state.
+ * @returns {boolean} true om klicket var "färskt" (lagom takt) → ger Flow-state-bonus.
  */
 function registerFlow(){
   const now = performance.now();
@@ -328,9 +328,9 @@ function registerFlow(){
 
   let fresh;
   if(gap > TUNE.FLOW_MAX_GAP){
-    flow = 1; fresh = true;                                  // lång paus → nytt flöde börjar
+    flow = 1; fresh = true;                                  // lång paus → nytt Flow-state börjar
   } else if(gap >= TUNE.FLOW_MIN_GAP){
-    flow = Math.min(flow + 1, TUNE.FLOW_MAX); fresh = true;  // lagom takt → bygg flöde
+    flow = Math.min(flow + 1, TUNE.FLOW_MAX); fresh = true;  // lagom takt → bygg Flow-state
   } else {
     fresh = false;                                           // för snabbt (batchning) → ingen bonus
   }
@@ -338,7 +338,7 @@ function registerFlow(){
   scheduleFlowReset();
   return fresh;
 }
-// Multiplikator härledd ur flödesnivån (1.0 vid nivå ≤1, upp till FLOW_MULT_MAX vid max).
+// Multiplikator härledd ur Flow-state-nivån (1.0 vid nivå ≤1, upp till FLOW_MULT_MAX vid max).
 function flowMult(){
   if(flow <= 1) return 1;
   return Math.min(TUNE.FLOW_MULT_MAX,
@@ -351,7 +351,7 @@ function scheduleFlowReset(){
 function updateFlowUI(){
   const wrap = document.getElementById("comboWrap");
   document.getElementById("comboX").textContent = "×" + flowMult().toFixed(1);
-  // Mätaren fylls med flödesnivån (ingen nedräkning – flödet hålls så länge du är i takt)
+  // Mätaren fylls med Flow-state-nivån (ingen nedräkning – Flow-state hålls så länge du är i takt)
   document.getElementById("comboBar").style.transform = "scaleX(" + (flow / TUNE.FLOW_MAX) + ")";
   wrap.classList.toggle("on", flow >= 2);
 }
@@ -366,7 +366,7 @@ function handleBokford(ev){
   const now = new Date();
   const day = todayKey(now);
 
-  // Flöde: färska (lagom spacade) klick ger multiplikator + färsk-bonus.
+  // Flow-state: färska (lagom spacade) klick ger multiplikator + färsk-bonus.
   // Batchning (för snabba klick) ger bara bas-XP.
   const fresh = registerFlow();
   const mult  = fresh ? flowMult() : 1;
@@ -511,8 +511,8 @@ const ACHIEVEMENTS = [
   {id:"t100",    ic:"💯", t:"Hundraklubben",     d:"100 bokförda",                      test:()=>S.total>=100},
   {id:"half",    ic:"🌗", t:"Halvvägs",          d:"Halvvägs till målet",               test:()=>S.total>=S.goal/2},
   {id:"goal",    ic:"🏁", t:"Målet klart!",      d:"Nådde årets mål",                   test:()=>S.total>=S.goal},
-  {id:"flow4",   ic:"⚡", t:"Flödesbyggare",     d:"Nå flöde ×1.6",                     test:()=>flowMult()>=1.5},
-  {id:"flowmax", ic:"🌊", t:"Flödesmästare",     d:"Nå maximalt flöde",                 test:()=>flow>=TUNE.FLOW_MAX},
+  {id:"flow4",   ic:"⚡", t:"Flow-byggare",      d:"Nå Flow-state ×1.6",                test:()=>flowMult()>=1.5},
+  {id:"flowmax", ic:"🌊", t:"Flow-mästare",      d:"Nå maximal Flow-state",             test:()=>flow>=TUNE.FLOW_MAX},
   {id:"steady",  ic:"🔁", t:"Löpande bokförare",  d:"Bokför spritt över minst 3 timmar samma dag", test:()=>{ const d=S.byDay[todayKey()]; return !!(d && d.hours && Object.keys(d.hours).length>=3); }},
   {id:"fast10",  ic:"🚄", t:"Grinder-läge",      d:"10 på 5 minuter",                   test:()=>S.firstMinuteBurst.length>=10},
   {id:"crit",    ic:"💥", t:"Första criten",     d:"Få en CRITICAL",                    test:()=>S.critCount>=1},
@@ -561,9 +561,9 @@ function triggerLevelUp(newLevel){
   lu.classList.add("show");
   bigCelebration();
   soundLevel();
+  // Stängs bara när användaren klickar (var som helst / valfri knapp) – ingen auto-stängning.
   const close = ()=>{ lu.classList.remove("show"); lu.removeEventListener("click",close); };
   setTimeout(()=> lu.addEventListener("click", close), 250);
-  setTimeout(close, 4000); // auto-stäng
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -916,7 +916,7 @@ function undoLast(){
   S.streakCur = h.prevStreakCur; S.streakBest = h.prevStreakBest; S.lastActiveDay = h.prevLastActive;
   if(S.xpLog.length) S.xpLog.pop();
   save();
-  flow=0; updateFlowUI();
+  // Flow-state rörs INTE – bara den senaste verifikationen ångras, inte din takt.
   renderAll(false);
   showToast("↩️","Ångrat","Senaste bokföring borttagen");
 }
@@ -952,7 +952,7 @@ function toggleMute(){ S.muted=!S.muted; save(); syncMuteBtn();
 function syncMuteBtn(){
   const b=document.getElementById("muteBtn");
   b.textContent = S.muted? "🔇 Ljud av" : "🔊 Ljud";
-  b.classList.toggle("active", !S.muted);
+  // Ingen accent-border – knappen ska se ut som de andra i verktygsfältet.
 }
 
 function exportData(){
